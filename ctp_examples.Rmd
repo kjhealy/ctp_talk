@@ -1,0 +1,361 @@
+---
+title: "CTP All-Hands sample code"
+author:
+- name: Kieran Healy
+  url: https://kieranhealy.org
+  affiliation: Duke University
+  affiliation_url: https://sociology.duke.edu
+date: '`r Sys.Date()`'
+output:
+  distill::distill_article:
+    highlight: tango
+    df_print: tibble
+toc: yes
+description: |
+  Code to accompany CTP All-Hands talk.
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      dpi =  200,
+                      fig.width = 7.2916667,
+                      fig.retina = 2,
+                      fig.asp = 1.618
+)
+```
+
+# The `covdata` package
+
+Details on obtaining and installing the `covdata` package can be found at the [package website](https://kjhealy.github.io/covdata/). In addition to `covdata`, to reproduce the analysis here you will need the [`tidyverse`](https://tidyverse.org) tools for R and the [`patchwork`](https://patchwork.data-imaginist.com) package. To reproduce this document you will also need the [`distill`](https://rstudio.github.io/distill/) package. 
+
+```{r}
+library(tidyverse)
+library(covdata)
+
+theme_covid <- function(){
+  theme_minimal(base_size=10) %+replace%
+    theme(
+      legend.position = "top"
+    )
+}
+
+theme_set(theme_covid())
+```
+
+# COVID Tracking Project Data
+
+The main COVID Tracking Project data file is in long format in `covdata`.
+
+```{r}
+covus
+```
+
+### Example: take a look at three measures, calculating a daily count for each
+
+```{r}
+measures <- c("positive", "negative", "death")
+
+covus %>%
+  filter(measure %in% measures, state == "NY") %>%
+  select(date, state, measure, count) %>%
+  pivot_wider(names_from = measure, values_from = count) %>%
+  mutate(across(positive:death, ~.x - lag(.x, order_by = date), 
+                .names = "daily_{col}"))
+```
+
+### State populations
+
+We'll use this in a moment to draw our per capita graph.
+
+```{r}
+state_pops <- uspop %>%
+  filter(sex_id == "totsex", hisp_id == "tothisp") %>%
+  select(state_abbr, statefips, pop, state) %>%
+  rename(name = state, 
+         state = state_abbr, fips = statefips) %>%
+  mutate(state = replace(state, fips == "11", "DC"))
+
+```
+
+### Draw a graph of per capita death rates
+
+```{r fig.caption = "Per capita death rates by State", fig.height=8, fig.width=10, fig.asp = NULL, layout = "l-screen"}
+
+## Using a convenience function to do something similar
+## to the count calculation above
+get_daily_count <- function(count, date){
+  count - lag(count, order_by = date)
+}
+
+
+covus %>%
+  filter(measure == "death", state %in% unique(state_pops$state)) %>%
+  group_by(state) %>%
+  mutate(
+    deaths_daily = get_daily_count(count, date), 
+    deaths7 = slider::slide_dbl(deaths_daily, mean, .before = 7, .after = 0, na.rm = TRUE)) %>%
+  left_join(state_pops, by = c("state", "fips")) %>%
+  filter(date > lubridate::ymd("2020-03-15")) %>%
+  ggplot(mapping = aes(x = date, y = (deaths7/pop)*1e5)) + 
+  geom_line(size = 0.5) + 
+  scale_y_continuous(labels = scales::comma_format(accuracy = 1)) + 
+  facet_wrap(~ reorder(name, -deaths7/pop), ncol = 8) +
+  labs(x = "Date", 
+       y = "Deaths per 100,000 Population (Seven Day Rolling Average)", 
+       title = "Average Death Rate per capita from COVID-19: US States and Washington, DC", 
+       subtitle = paste("COVID Tracking Project data as of", format(max(covnat$date), "%A, %B %e, %Y. Seven-day rolling average.")), 
+       caption = "Kieran Healy @kjhealy / Data: https://www.covidtracking.com/") +
+  theme_minimal()
+```
+
+# Short-Term Mortality Fluctuations data from the Human Mortality Database
+
+```{r}
+stmf
+
+```
+
+### Example: twenty years of mortality trends in Belgium
+
+```{r, fig.height=4, fig.width=10, fig.asp = NULL, layout = "l-body-outset"}
+stmf %>%
+  filter(sex == "b", country_code == "BEL") %>%
+  group_by(year, week) %>%
+  mutate(yr_ind = year %in% 2020) %>%
+  slice(1) %>%
+  ggplot(aes(x = week, y = deaths_total, color = yr_ind, group = year)) + 
+  geom_line(size = 0.9) + 
+  scale_color_manual(values = c("gray70", "red"), labels = c("2000-2019", "2020")) +
+  labs(x = "Week of the Year", 
+       y = "Total Deaths", 
+       color = "Year",
+       title = "Weekly recorded deaths in Belgium, 2000-2020") + 
+  theme_minimal() + 
+  theme(legend.position = "top")
+```
+
+# CDC/NCHS Mortality Data
+
+### Example 1: All-Cause Mortality over the past five years, for six states
+
+```{r fig.caption = "All-Cause Mortality in six states", fig.height=6, fig.width=12, fig.asp = NULL, layout = "l-body-outset"}
+nchs_wdc %>% 
+  filter(jurisdiction %in% c("New York", "New Jersey", "Michigan", "Georgia", "California", "Alabama")) %>%
+  filter(cause == "All Cause", year > 2014) %>%
+  group_by(jurisdiction, year, week) %>% 
+  summarize(deaths = sum(n, na.rm = TRUE)) %>%
+  mutate(yr_ind = year %in% 2020) %>%
+  filter(!(year == 2020 & week > 35)) %>%
+  ggplot(aes(x = week, y = deaths, color = yr_ind, group = year)) + 
+  geom_line(size = 0.9) + 
+  scale_color_manual(values = c("gray70", "red"), labels = c("2015-2019", "2020")) +
+  scale_x_continuous(breaks = c(1, 10, 20, 30, 40, 50), labels = c(1, 10, 20, 30, 40, 50)) + 
+  scale_y_continuous(labels = scales::comma) +
+  facet_wrap(~ jurisdiction, scales = "free_y", ncol = 3) + 
+  labs(x = "Week of the Year", 
+       y = "Total Deaths", 
+       color = "Years",
+       title = "Weekly recorded deaths from all causes", 
+       subtitle = "2020 data are for Weeks 1 to 35. Raw Counts, each state has its own y-axis scale.", 
+       caption = "Graph: @kjhealy Data: CDC") + 
+  theme_minimal() + 
+  theme(legend.position = "top")
+```
+
+### Example 2: A more complex composite plot of different views of excess mortality
+
+First we write some functions to draw and assemble the figure.
+
+```{r}
+## First some functions to draw the plots 
+library(patchwork)
+
+## Choose how many red-line wks
+nwks <- 30
+
+season_label <- tibble(wk_num = lubridate::epiweek(as.Date(c("2020-03-01",
+                                     "2020-06-01",
+                                     "2020-09-01",
+                                     "2020-12-01"))),
+                    season_lab = c("Spring", "Summer", "Autumn", "Winter"))
+
+order_panels <- function(st = state, ...) {
+  df %>% 
+  filter(jurisdiction %in% st, cause != "All Cause") %>%
+  group_by(cause) %>% 
+  summarize(deaths = sum(n, na.rm = TRUE), 
+            .groups = "drop") %>%
+  mutate(cause_rank = rank(-deaths), 
+         o = order(cause_rank),
+         cause_ord = factor(cause, levels = cause[o], ordered = TRUE)) %>%
+  select(cause, cause_ord)
+}
+
+## Count of all deaths
+patch_state_count <- function(state) {
+
+  out <- df %>% 
+  filter(jurisdiction %in% state, cause == "All Cause") %>%
+  group_by(year, week) %>% 
+  mutate(yr_ind = year %in% 2020) %>%
+  filter(!(year == 2020 & week > nwks)) %>%
+  ggplot(aes(x = week, y = n, color = yr_ind, group = year)) + 
+  geom_line(size = 0.9) + 
+  scale_color_manual(values = c("gray70", "firebrick"), labels = c("2015-2019", "2020")) +
+  scale_x_continuous(breaks = season_label$wk_num, labels = season_label$season_lab) +      
+  scale_y_continuous(labels = scales::comma) +
+  labs(x = NULL, 
+       y = "Total Deaths", 
+       color = "Years",
+       title = "Weekly recorded deaths from all causes", 
+       subtitle = paste0("2020 data are for Weeks 1 to ", nwks, ". Raw Counts.")) 
+  
+  out
+
+}
+
+## Line graphs by cause
+patch_state_cause <- function(state) {
+
+panel_ordering <- order_panels(st = state)
+  
+out <- df %>% 
+  filter(jurisdiction == state, 
+         cause %nin% c("All Cause", "COVID-19 Multiple cause", "COVID-19 Underlying")) %>%
+  group_by(cause, year, week) %>% 
+  summarize(deaths = sum(n, na.rm = TRUE), .groups = "drop") %>%
+  mutate(yr_ind = year %in% 2020) %>%
+  filter(!(year == 2020 & week > nwks)) %>%
+  left_join(panel_ordering, by = "cause") %>%
+  ggplot(aes(x = week, y = deaths, color = yr_ind)) + 
+  geom_line(size = 0.9, mapping = aes(group = year)) + 
+  scale_color_manual(values = c("gray70", "firebrick"), labels = c("2015-2019", "2020")) +
+  scale_x_continuous(breaks = c(1, 10, 20, 30, 40, 50), labels = as.character(c(1, 10, 20, 30, 40, 50))) + 
+  scale_y_continuous(labels = scales::comma) +
+  facet_wrap(~ cause_ord, ncol = 2, labeller = label_wrap_gen(25)) + 
+  labs(x = "Week of the Year", 
+       y = "Total Deaths", 
+       color = "Years",
+       title = "Weekly deaths from selected causes", 
+       subtitle = "Panels ordered by number of deaths. Raw Counts.") 
+
+out
+}
+
+## Column chart of departures from norm, by cause 
+patch_state_percent <- function(state){
+  
+  panel_ordering <- order_panels(st = state)
+
+  out <- df %>% 
+  filter(jurisdiction %in% state, 
+         year == 2020, 
+         cause %nin% c("All Cause", "COVID-19 Multiple cause", 
+                                                "COVID-19 Underlying"), !is.na(pct_diff)) %>%
+  group_by(week) %>% 
+  filter(!(week > nwks)) %>%
+  mutate(ov_un = pct_diff > 0) %>%
+  left_join(panel_ordering, by = "cause") %>%
+  ggplot(aes(x = week, y = pct_diff/100, fill = ov_un)) + 
+  geom_col() + 
+  scale_x_continuous(breaks = c(1, seq(10, nwks, 10)), labels = as.character(c(1, seq(10, nwks, 10)))) + 
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = c("gray40", "firebrick")) +
+  guides(fill = FALSE) + 
+  facet_wrap(~ cause_ord, ncol = 2, labeller = label_wrap_gen(25)) + 
+  labs(x = "Week of the Year", 
+       y = "Percent", 
+       title = "Percent difference from 2015-2019 average",
+       subtitle = paste0("Data for weeks 1 to ", nwks, " only.")) 
+
+  out
+}
+
+## Column chart of COVD-19 attributed deaths
+patch_state_covid <- function(state) {
+
+  out <- df %>% 
+  filter(jurisdiction %in% state, cause %in% c("COVID-19 Multiple cause")) %>%
+  group_by(year, week) %>% 
+  mutate(yr_ind = year %in% 2020) %>%
+  filter(year == 2020) %>%
+  ggplot(aes(x = week, y = n, group = year)) + 
+  geom_col(fill = "gray30") + 
+  scale_x_continuous(breaks = c(1, 10, 20, 30, 40, 50), 
+                     labels = as.character(c(1, 10, 20, 30, 40, 50)), 
+                     limits = c(1, 52)) + 
+  scale_y_continuous(labels = scales::comma) + 
+  labs(x = "Week of the Year", 
+       y = "Total Deaths", 
+       color = "Years",
+       subtitle = "Raw counts.",
+       title = "Weekly deaths recorded as COVID-19 (Multiple cause)") 
+  
+  out
+
+}
+
+## Assemble the figure
+make_patchplot <- function(state){
+  
+if(state == "New York")  {
+  state_title <- paste(state, "(Excluding New York City)")
+} else 
+  {
+  state_title <- state
+}
+
+timestamp <-  lubridate::stamp("March 1, 1999", "%B %d, %Y")(lubridate::ymd(Sys.Date()))   
+  
+(patch_state_count(state) + theme(plot.margin = unit(c(5,0,0,0), "pt"))) / patch_state_covid(state) / (patch_state_cause(state) + (patch_state_percent(state))) +  
+    plot_layout(heights = c(2, 0.5, 4), guides = 'collect') + 
+  plot_annotation(
+  title = state_title,
+  caption = paste0("Graph: @kjhealy Data: CDC. This graph was made on ", timestamp, "."), 
+  theme = theme(plot.title = element_text(size = rel(2), hjust = 0, face = "plain")))
+}
+
+```
+
+
+Next we create a working dataset and a table of jurisdictions from `nchs_wdc`.
+
+```{r}
+dat <- nchs_wdc %>%
+  filter(year > 2014) %>%
+  mutate(month_label = lubridate::month(week_ending_date, label = TRUE))
+
+average_deaths <- nchs_wdc %>% 
+  filter(year %in% c(2015:2019)) %>%
+  group_by(jurisdiction, week, cause) %>%
+  summarize(average_wk_deaths = mean(n, na.rm = TRUE)) 
+
+df <- left_join(dat, average_deaths) %>%
+  select(everything(), n, average_wk_deaths) %>%
+  mutate(n_diff = n - average_wk_deaths, 
+         pct_diff = (n_diff / n)*100) %>%
+  filter(cause %nin% c("Natural Causes", "Other"))
+
+states <- nchs_wdc %>% 
+  select(jurisdiction) %>% 
+  unique() %>%
+  mutate(fname = tolower(paste0("figures/", jurisdiction, "_patch")), 
+         fname = stringr::str_replace_all(fname, " ", "_"))
+
+```
+
+Now we can make a composite plot.
+
+### Composite plot for the US
+
+```{r, fig.caption = "Overview of US COVID-19 Excess Mortality", fig.height=16, fig.width=9, fig.asp = NULL, layout = "l-body-outset"}
+make_patchplot("United States")
+```
+
+
+### Composite plot for, e.g., Connecticut
+
+```{r, fig.caption = "Overview of US COVID-19 Excess Mortality", fig.height=16, fig.width=9, fig.asp = NULL, layout = "l-body-outset"}
+make_patchplot("Connecticut")
+```
+
