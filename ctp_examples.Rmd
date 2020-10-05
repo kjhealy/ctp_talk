@@ -355,7 +355,17 @@ make_patchplot("United States")
 
 ### Composite plot for, e.g., Connecticut
 
-```{r, fig.caption = "Overview of US COVID-19 Excess Mortality", fig.height=16, fig.width=9, fig.asp = NULL, layout = "l-body-outset"}
+```{r, fig.caption = "Overview of COVID-19 Excess Mortality for Connecticut", fig.height=16, fig.width=9, fig.asp = NULL, layout = "l-body-outset"}
 make_patchplot("Connecticut")
+```
+
+### Just look at one of the subplots
+
+Finally, because we've written separate functions for each panel we can just look at any one component of the plot if we like.
+
+```{r, fig.caption = "Percent different panel for Georgia", fig.height=16, fig.width=9, fig.asp = NULL, layout = "l-body-outset"}
+
+patch_state_percent("Georgia")
+
 ```
 
